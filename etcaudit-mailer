@@ -1,0 +1,60 @@
+#!/bin/bash
+
+parse_audit_log() {
+    local audit_log="/var/log/audit/audit.log"
+    local current_date=$(date +%Y-%m-%d)
+
+    awk -v OFS=": " -v current_date="$current_date" '
+    function get_username(auid) {
+        cmd = "getent passwd " auid " | cut -d: -f1"
+        cmd | getline username
+        close(cmd)
+        return username
+    }
+
+    /type=PATH/ {
+        timestamp = filename = action = ""
+
+        if (match($0, /msg=audit\(([^)]+)\)/, arr)) {
+            timestamp = strftime("%Y-%m-%d %H:%M:%S", arr[1])
+            date = substr(timestamp, 1, 10)
+        }
+        if (match($0, /name="([^"]+)"/, arr)) {
+            filename = arr[1]
+        }
+        if (match($0, /nametype=([^ ]+)/, arr)) {
+            if (arr[1] == "CREATE") action = "created"
+            else if (arr[1] == "DELETE" || arr[1] == "DELETE_DIR") action = "deleted"
+            else if (arr[1] == "NORMAL") action = "edited"
+        }
+    }
+    /type=SYSCALL/ {
+        if (match($0, /auid=([^ ]+)/, arr)) {
+            auid = arr[1]
+            username = get_username(auid)
+        }
+    }
+    (filename && action && auid && timestamp && date == current_date) {
+        if (index(filename, ".git/") == 0 && index(filename, ".etckeeper") == 0 && substr(filename, length(filename) - 3) != ".swp") {
+            print timestamp ": " filename ": " action ": " username
+        }
+        filename = action = auid = timestamp = username = ""
+    }
+    ' "$audit_log"
+}
+
+email_output() {
+    local recipient="email@yourmail.com"
+    local subject="$(hostname) - Daily /etc Changes Report $(date +%Y-%m-%d)"
+    local sender="etctrack@$(hostname)"
+
+
+    local output=$(parse_audit_log)
+
+    if [ -n "$output" ]; then
+        echo "$output" | mail -r "$sender" -s "$subject" "$recipient"
+    fi
+}
+
+email_output
+

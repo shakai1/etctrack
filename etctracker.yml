@@ -1,0 +1,77 @@
+- name: Install and configure auditd, set up cron job, and ensure sendmail is enabled
+  hosts: etctracker-hosts
+  become: yes
+  tasks:
+    - name: Install auditd if not present
+      package:
+        name: auditd
+        state: present
+
+    - name: Enable auditd service to start on boot
+      systemd:
+        name: auditd
+        enabled: yes
+        state: started
+
+    - name: Ensure the audit rules file exists
+      file:
+        path: /etc/audit/rules.d/00-etc.rules
+        state: touch
+        mode: '0644'
+
+    - name: Ensure the audit rule for /etc is present
+      lineinfile:
+        path: /etc/audit/rules.d/00-etc.rules
+        line: '-w /etc -p wa -k etc_changes'
+        state: present
+        mode: '0644'
+
+    - name: Restart auditd to apply rules
+      service:
+        name: auditd
+        state: restarted
+
+    - name: Copy etcaudit-mailer script to cron.daily
+      copy:
+        src: etcaudit-mailer
+        dest: /etc/cron.daily/etcaudit-mailer
+        mode: '0755'
+
+    - name: Enable cron service to start on boot
+      systemd:
+        name: cron
+        enabled: yes
+        state: started
+
+    - name: Install sendmail if not present
+      package:
+        name: sendmail
+        state: present
+
+    - name: Enable sendmail service to start on boot
+      systemd:
+        name: sendmail
+        enabled: yes
+        state: started
+
+    - name: Install mailutils if not present
+      package:
+        name: mailutils
+        state: present
+
+    - name: Configure log rotation for auditd log
+      copy:
+        content: |
+          /var/log/audit/audit.log {
+              weekly
+              rotate 4
+              compress
+              missingok
+              notifempty
+              create 0640 root root
+              postrotate
+                  /sbin/service auditd reload > /dev/null 2>&1 || true
+              endscript
+          }
+        dest: /etc/logrotate.d/auditd
+        mode: '0644'
